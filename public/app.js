@@ -19,7 +19,7 @@ const LOGO_TAXI20 = 'https://i.postimg.cc/Ghkvc51M/1.png';
 
 const DEFAULT_COND = [
   'Valores válidos para o trajeto, as datas e as quantidades descritos nesta proposta.',
-  'Alterações de endereço, horário ou quantidade de passageiros/volumes podem gerar revisão dos valores.',
+  'Alterações de endereço, horário, paradas extras ou número de passageiros podem gerar revisão dos valores.',
   'Tempo de espera acima do combinado será cobrado à parte.',
   'Pedágios e estacionamentos só estão incluídos quando aparecem nos adicionais.',
 ].join('\n');
@@ -31,8 +31,9 @@ const STATUS = {
   recusada: ['Recusada', 'red'],
 };
 
-const TIPOS_CARGA = ['Transporte de passageiros', 'Transporte executivo', 'Transfer aeroporto', 'Fretamento', 'Entrega / encomenda', 'Carga geral', 'Carga fracionada', 'Carga paletizada', 'Refrigerada', 'Mudança', 'Outra'];
-const VEICULOS = ['Sedan', 'Sedan executivo', 'SUV', 'Minivan', 'Van', 'Micro-ônibus', 'Ônibus', 'Utilitário (Fiorino)', 'VUC', '3/4', 'Toco', 'Truck', 'Carreta'];
+const TIPOS_SERVICO = ['Transfer aeroporto', 'Transporte executivo', 'Corrida de táxi', 'Viagem intermunicipal', 'Diária à disposição', 'Evento / casamento', 'Contrato para empresa', 'Outro'];
+const TRAJETOS = ['Só ida', 'Ida e volta'];
+const VEICULOS = ['Táxi comum', 'Sedan', 'Sedan executivo', 'SUV executivo', 'Carro blindado', 'Minivan'];
 
 /* ---------- Comunicação com o servidor ---------- */
 async function api(metodo, caminho, corpo) {
@@ -64,6 +65,7 @@ const pad = x => String(x).padStart(2, '0');
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const parseDate = s => (s ? new Date(s + 'T00:00:00') : null);
 const fmtDate = d => { if (!d) return ''; if (typeof d === 'string') d = parseDate(d); return isNaN(d) ? '' : d.toLocaleDateString('pt-BR'); };
+const quandoTexto = (d, h) => [fmtDate(d), h ? `às ${h}` : ''].filter(Boolean).join(' ');
 const addDays = (s, k) => { const d = parseDate(s) || parseDate(today()); d.setDate(d.getDate() + k); return d; };
 const daysUntil = d => Math.round((d - parseDate(today())) / 864e5);
 const initials = s => (String(s || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('') || 'T').toUpperCase();
@@ -106,7 +108,10 @@ function modal(html) {
 /* ---------- Ícones ---------- */
 const ICONS = {
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
-  truck: '<path d="M1 4h14v12H1z"/><path d="M15 8h4l4 4v4h-8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+  car: '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>',
+  suitcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M8 12v3M16 12v3"/>',
+  plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
+  repeat: '<path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
@@ -218,9 +223,12 @@ function newQuoteData() {
   return {
     status: 'rascunho', data: today(), validadeDias: n(e.validade) || 7, criadoEm: Date.now(),
     cliente: { nome: '', empresa: '', documento: '', telefone: '', email: '' },
-    rota: { origem: '', destino: '', distanciaKm: '', coleta: '', entrega: '' },
-    carga: { tipo: TIPOS_CARGA[0], descricao: '', passageiros: '', peso: '', volume: '', quantidade: '', valor: '' },
-    opcoes: [{ nome: 'Transporte dedicado', veiculo: 'Sedan executivo', prazo: '', valor: '', descricao: '', recomendado: true }],
+    rota: { origem: '', destino: '', distanciaKm: '', coleta: '', hora: '', entrega: '', horaRetorno: '' },
+    carga: { tipo: TIPOS_SERVICO[0], trajeto: TRAJETOS[0], passageiros: '', quantidade: '', voo: '', descricao: '' },
+    opcoes: [
+      { nome: 'Táxi', veiculo: 'Táxi comum', prazo: '', valor: '', descricao: '', recomendado: false },
+      { nome: 'Executivo', veiculo: 'Sedan executivo', prazo: '', valor: '', descricao: 'Motorista de traje social, água a bordo e espera no desembarque.', recomendado: true },
+    ],
     adicionais: [],
     desconto: '', descontoTipo: 'R$',
     pagamento: e.pagamento || '', observacoes: '', condicoes: e.condicoes ?? DEFAULT_COND,
@@ -266,6 +274,7 @@ function logoHTML(e) {
 
 function renderProposal(q, e, { interactive = false } = {}) {
   const c = q.cliente || {}, r = q.rota || {}, g = q.carga || {};
+  const idaVolta = g.trajeto === 'Ida e volta';
   const opcoes = visibleOptions(q);
   const vu = validUntil(q);
   const left = vu ? daysUntil(vu) : null;
@@ -288,10 +297,9 @@ function renderProposal(q, e, { interactive = false } = {}) {
   const facts = [
     ['tag', 'Serviço', g.tipo],
     ['user', 'Passageiros', n(g.passageiros) ? fmtNum(g.passageiros, 0) : ''],
-    ['weight', 'Peso', n(g.peso) ? `${fmtNum(g.peso)} kg` : ''],
-    ['cube', 'Volume', n(g.volume) ? `${fmtNum(g.volume)} m³` : ''],
-    ['layers', 'Volumes / malas', n(g.quantidade) ? fmtNum(g.quantidade, 0) : ''],
-    ['shield', 'Valor da mercadoria', n(g.valor) ? brl(g.valor) : ''],
+    ['repeat', 'Trajeto', g.trajeto],
+    ['suitcase', 'Malas', n(g.quantidade) ? fmtNum(g.quantidade, 0) : ''],
+    ['plane', 'Voo', g.voo],
   ].filter(f => f[2]);
 
   const hasBreakdown = (q.adicionais || []).some(a => n(a.valor)) || n(q.desconto) > 0;
@@ -302,7 +310,7 @@ function renderProposal(q, e, { interactive = false } = {}) {
     return `<article class="option ${o.recomendado && opcoes.length > 1 ? 'is-rec' : opcoes.length === 1 ? 'is-rec' : ''}">
       ${o.recomendado && opcoes.length > 1 ? `<span class="rec-badge">${ic('star')} Recomendado</span>` : ''}
       <h3>${esc(o.nome || 'Transporte')}</h3>
-      ${o.veiculo || o.prazo ? `<div class="opt-meta">${o.veiculo ? `<span>${ic('truck')}${esc(o.veiculo)}</span>` : ''}${o.prazo ? `<span>${ic('clock')}${esc(o.prazo)}</span>` : ''}</div>` : ''}
+      ${o.veiculo || o.prazo ? `<div class="opt-meta">${o.veiculo ? `<span>${ic('car')}${esc(o.veiculo)}</span>` : ''}${o.prazo ? `<span>${ic('clock')}${esc(o.prazo)}</span>` : ''}</div>` : ''}
       ${o.descricao ? `<p>${esc(o.descricao)}</p>` : ''}
       <div class="option-spacer"></div>
       <div class="opt-price"><small>Valor total</small><strong>${brl(t.total)}</strong></div>
@@ -335,7 +343,9 @@ function renderProposal(q, e, { interactive = false } = {}) {
       <p class="p-kicker">Orçamento de transporte${clientName ? ' para ' + esc(clientName) : ''}</p>
       <h1 class="p-title">${routeTitle}</h1>
       <div class="p-hero-foot">
-        ${n(r.distanciaKm) ? `<span class="p-chip">${ic('route')} ${fmtNum(r.distanciaKm, 0)} km</span>` : ''}
+        ${n(r.distanciaKm) ? `<span class="p-chip">${ic('route')} ${fmtNum(r.distanciaKm, 0)} km${idaVolta ? ' cada trecho' : ''}</span>` : ''}
+        ${r.coleta ? `<span class="p-chip">${ic('calendar')} ${quandoTexto(r.coleta, r.hora)}</span>` : ''}
+        ${idaVolta ? `<span class="p-chip">${ic('repeat')} Ida e volta</span>` : ''}
         ${opcoes.length > 1 ? `<span class="p-chip">${ic('layers')} ${opcoes.length} opções</span>` : ''}
         ${validity}
       </div>
@@ -352,15 +362,15 @@ function renderProposal(q, e, { interactive = false } = {}) {
       <section class="p-section">
         <h2>${ic('route')} Rota</h2>
         <div class="route">
-          <div class="route-pt"><small>Origem</small><strong>${esc(r.origem || '—')}</strong>${r.coleta ? `<span>Saída: ${fmtDate(r.coleta)}</span>` : ''}</div>
-          <div class="route-line"><span class="truck">${ic('truck')}</span>${n(r.distanciaKm) ? `<em>${fmtNum(r.distanciaKm, 0)} km</em>` : ''}</div>
-          <div class="route-pt end"><small>Destino</small><strong>${esc(r.destino || '—')}</strong>${r.entrega ? `<span>Chegada prevista: ${fmtDate(r.entrega)}</span>` : ''}</div>
+          <div class="route-pt"><small>Origem</small><strong>${esc(r.origem || '—')}</strong>${r.coleta || r.hora ? `<span>Embarque: ${quandoTexto(r.coleta, r.hora)}</span>` : ''}</div>
+          <div class="route-line"><span class="vehicle">${ic('car')}</span>${n(r.distanciaKm) ? `<em>${fmtNum(r.distanciaKm, 0)} km</em>` : ''}</div>
+          <div class="route-pt end"><small>Destino</small><strong>${esc(r.destino || '—')}</strong>${idaVolta && (r.entrega || r.horaRetorno) ? `<span>Retorno: ${quandoTexto(r.entrega, r.horaRetorno)}</span>` : ''}</div>
         </div>
       </section>
     </div>
 
     ${facts.length || g.descricao ? `<section class="p-section">
-      <h2>${ic('box')} Detalhes do serviço</h2>
+      <h2>${ic('user')} Detalhes da viagem</h2>
       <div class="facts">
         ${facts.map(([i, l, v]) => `<div class="fact"><small>${ic(i)}${l}</small><strong>${esc(v)}</strong></div>`).join('')}
         ${g.descricao ? `<div class="fact wide"><small>${ic('file')}Descrição</small><strong>${esc(g.descricao)}</strong></div>` : ''}
@@ -368,7 +378,7 @@ function renderProposal(q, e, { interactive = false } = {}) {
     </section>` : ''}
 
     <section class="p-section">
-      <h2>${ic('truck')} ${opcoes.length > 1 ? 'Opções' : 'Valor'}</h2>
+      <h2>${ic('car')} ${opcoes.length > 1 ? 'Opções de veículo' : 'Valor'}</h2>
       ${opcoes.length ? `<div class="options">${opcoes.map(optionCard).join('')}</div>` : '<p style="color:var(--muted);margin:0">Nenhuma opção cadastrada.</p>'}
     </section>
 
@@ -393,7 +403,7 @@ function renderProposal(q, e, { interactive = false } = {}) {
    ========================================================= */
 function topbarBrand() {
   const e = getEmpresa();
-  return `<a href="#/" class="app-mark" title="Início" style="text-decoration:none">${ic('truck')}</a>
+  return `<a href="#/" class="app-mark" title="Início" style="text-decoration:none">${ic('car')}</a>
     <h1>Orçamentos${e.nome ? ` <span style="color:var(--muted);font-weight:500">· ${esc(e.nome)}</span>` : ''}</h1>`;
 }
 
@@ -522,7 +532,7 @@ function opcoesHTML(q) {
     <div class="grid">
       ${inp('Nome da opção', L('opcoes', i, 'nome'), o.nome, { ph: 'Ex.: Sedan executivo' })}
       ${inp('Veículo', L('opcoes', i, 'veiculo'), o.veiculo, { attrs: 'list="dl-veiculos"', ph: 'Ex.: Sedan' })}
-      ${inp('Prazo / duração', L('opcoes', i, 'prazo'), o.prazo, { ph: 'Ex.: 3 horas, 2 dias úteis' })}
+      ${inp('Duração estimada', L('opcoes', i, 'prazo'), o.prazo, { ph: 'Ex.: 40 min' })}
       ${inp('Valor (R$)', L('opcoes', i, 'valor'), o.valor, { type: 'number', attrs: MONEY, ph: '0,00' })}
       ${area('Descrição (opcional)', L('opcoes', i, 'descricao'), o.descricao, { rows: 2, ph: 'O que está incluso nesta opção' })}
     </div>
@@ -531,7 +541,7 @@ function opcoesHTML(q) {
 
 function adicionaisHTML(q) {
   return q.adicionais.map((a, i) => `<div class="row-line">
-    <input ${L('adicionais', i, 'descricao')} value="${esc(a.descricao)}" placeholder="Ex.: Seguro, pedágio, ajudantes" aria-label="Descrição do adicional">
+    <input ${L('adicionais', i, 'descricao')} value="${esc(a.descricao)}" placeholder="Ex.: Pedágio, hora de espera, parada extra" aria-label="Descrição do adicional">
     <input type="number" ${MONEY} ${L('adicionais', i, 'valor')} value="${esc(a.valor)}" placeholder="R$ 0,00" aria-label="Valor do adicional">
     <button type="button" class="icon-btn danger" data-act="del-adicional" data-i="${i}" title="Remover">${ic('trash')}</button>
   </div>`).join('');
@@ -581,31 +591,33 @@ function viewEditor(id) {
         <section class="card">
           <div class="card-h"><h3>${ic('route')} Rota</h3></div>
           <div class="grid">
-            ${inp('Origem', P('rota.origem'), r.origem, { ph: 'Cidade, UF' })}
-            ${inp('Destino', P('rota.destino'), r.destino, { ph: 'Cidade, UF' })}
-            ${inp('Distância (km)', P('rota.distanciaKm'), r.distanciaKm, { type: 'number', attrs: 'min="0"' })}
-            ${inp('Data de saída / coleta', P('rota.coleta'), r.coleta, { type: 'date' })}
-            ${inp('Chegada / entrega prevista', P('rota.entrega'), r.entrega, { type: 'date' })}
+            ${inp('Embarque', P('rota.origem'), r.origem, { ph: 'Endereço ou local (ex.: Hotel Bourbon, Curitiba)', span: true })}
+            ${inp('Destino', P('rota.destino'), r.destino, { ph: 'Ex.: Aeroporto Afonso Pena', span: true })}
+            ${inp('Data do embarque', P('rota.coleta'), r.coleta, { type: 'date' })}
+            ${inp('Horário do embarque', P('rota.hora'), r.hora, { type: 'time' })}
+            ${sel('Trajeto', P('carga.trajeto'), g.trajeto || TRAJETOS[0], TRAJETOS)}
+            ${inp('Distância (km, um trecho)', P('rota.distanciaKm'), r.distanciaKm, { type: 'number', attrs: 'min="0"' })}
+            <div class="grid span2" id="retorno" ${g.trajeto === 'Ida e volta' ? '' : 'hidden'}>
+              ${inp('Data do retorno', P('rota.entrega'), r.entrega, { type: 'date' })}
+              ${inp('Horário do retorno', P('rota.horaRetorno'), r.horaRetorno, { type: 'time' })}
+            </div>
           </div>
         </section>
 
         <section class="card">
-          <div class="card-h"><h3>${ic('box')} Serviço</h3></div>
-          <p class="hint">Preencha só o que fizer sentido: passageiros para viagens, peso e volume para cargas.</p>
+          <div class="card-h"><h3>${ic('user')} Viagem</h3></div>
           <div class="grid">
-            ${sel('Tipo de serviço', P('carga.tipo'), g.tipo, TIPOS_CARGA.includes(g.tipo) || !g.tipo ? TIPOS_CARGA : [g.tipo, ...TIPOS_CARGA])}
+            ${sel('Tipo de serviço', P('carga.tipo'), g.tipo, TIPOS_SERVICO.includes(g.tipo) || !g.tipo ? TIPOS_SERVICO : [g.tipo, ...TIPOS_SERVICO])}
+            ${inp('Número do voo (se houver)', P('carga.voo'), g.voo, { ph: 'Ex.: G3 1234' })}
             ${inp('Passageiros', P('carga.passageiros'), g.passageiros, { type: 'number', attrs: 'min="0" step="1"' })}
-            ${inp('Peso (kg)', P('carga.peso'), g.peso, { type: 'number', attrs: 'min="0" step="any"' })}
-            ${inp('Volume (m³)', P('carga.volume'), g.volume, { type: 'number', attrs: 'min="0" step="any"' })}
-            ${inp('Quantidade de volumes / malas', P('carga.quantidade'), g.quantidade, { type: 'number', attrs: 'min="0" step="1"' })}
-            ${inp('Valor da mercadoria (R$)', P('carga.valor'), g.valor, { type: 'number', attrs: MONEY })}
-            ${area('Descrição', P('carga.descricao'), g.descricao, { rows: 2, ph: 'Ex.: ida e volta com espera, motorista bilíngue, carga frágil…' })}
+            ${inp('Malas', P('carga.quantidade'), g.quantidade, { type: 'number', attrs: 'min="0" step="1"' })}
+            ${area('Detalhes', P('carga.descricao'), g.descricao, { rows: 2, ph: 'Ex.: placa com nome no desembarque, cadeirinha infantil, motorista bilíngue…' })}
           </div>
         </section>
 
         <section class="card">
-          <div class="card-h"><h3>${ic('truck')} Opções de valor</h3></div>
-          <p class="hint">Ofereça uma ou mais alternativas (ex.: sedan, executivo, van). O cliente vê cada uma lado a lado.</p>
+          <div class="card-h"><h3>${ic('car')} Opções de veículo</h3></div>
+          <p class="hint">Ofereça uma ou mais alternativas (ex.: táxi comum, sedan executivo, SUV). O cliente vê cada uma lado a lado.</p>
           <div id="opcoes">${opcoesHTML(q)}</div>
           <button type="button" class="btn add-btn" data-act="add-opcao">${ic('plus')}Adicionar opção</button>
         </section>
@@ -626,8 +638,8 @@ function viewEditor(id) {
         <section class="card">
           <div class="card-h"><h3>${ic('card')} Condições</h3></div>
           <div class="grid">
-            ${area('Forma de pagamento', P('pagamento'), q.pagamento, { rows: 2, ph: 'Ex.: Boleto 15 dias após a entrega' })}
-            ${area('Observações', P('observacoes'), q.observacoes, { rows: 3, ph: 'Horários, restrições, agendamentos…' })}
+            ${area('Forma de pagamento', P('pagamento'), q.pagamento, { rows: 2, ph: 'Ex.: PIX antecipado ou faturado para a empresa' })}
+            ${area('Observações', P('observacoes'), q.observacoes, { rows: 3, ph: 'Ex.: o motorista aguarda até 30 min após o pouso' })}
             ${area('Condições gerais (uma por linha)', P('condicoes'), q.condicoes, { rows: 5 })}
           </div>
         </section>
@@ -655,8 +667,10 @@ function viewEditor(id) {
   const onInput = ev => {
     const t = ev.target;
     const v = t.type === 'number' ? (t.value === '' ? '' : parseFloat(t.value)) : t.value;
-    if (t.dataset.path) setPath(q, t.dataset.path, v);
-    else if (t.dataset.list) {
+    if (t.dataset.path) {
+      setPath(q, t.dataset.path, v);
+      if (t.dataset.path === 'carga.trajeto') document.getElementById('retorno').hidden = v !== 'Ida e volta';
+    } else if (t.dataset.list) {
       const arr = q[t.dataset.list], i = +t.dataset.i, k = t.dataset.k;
       if (k === 'recomendado') arr.forEach((o, j) => { o.recomendado = j === i; });
       else arr[i][k] = v;

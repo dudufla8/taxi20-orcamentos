@@ -61,7 +61,7 @@ Propostas de transporte organizadas, com um link para o cliente ver, imprimir e 
 ## Parte 5 — Cartão no portal
 1. Você me diz **"pode publicar o portal"**: eu salvo e envio o cartão **Orçamentos** para o `taxi20-portal`.
    A Vercel publica o portal sozinha.
-2. No portal → **Endereços dos módulos** → **Orçamentos**: cole o endereço da Parte 2 (ex.: `https://taxi20-orcamentos.vercel.app/`) → **Salvar**.
+2. O cartão já vem com o endereço `https://taxi20-orcamentos.vercel.app/`. Só mexa em **Endereços dos módulos** se o endereço mudar.
 3. Quem vê o cartão: **Administração** e **Atendimento**. Para outros perfis, marque "Abrir os Orçamentos de transporte" em **Usuários e perfis**.
 4. Teste: clique no cartão **Orçamentos**. Ele deve abrir já com o seu nome no canto.
 
