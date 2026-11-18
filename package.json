@@ -1,0 +1,16 @@
+{
+  "name": "taxi20-orcamentos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orçamentos de transporte — módulo do Portal Táxi 2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node servidor-local.mjs",
+    "test": "node --test tests/api.test.js",
+    "passe-teste": "node scripts/passe-teste.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.15",
+    "@neondatabase/serverless": "^1.2.0"
+  }
+}

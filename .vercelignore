@@ -1,0 +1,8 @@
+# Nunca enviar para a Vercel: senhas e o banco de teste deste computador.
+.env
+.env.*
+/dados/
+node_modules/
+.claude/
+tests/
+scripts/

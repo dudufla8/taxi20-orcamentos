@@ -1,0 +1,8 @@
+node_modules/
+# Senhas e chaves: nunca vão para o Git.
+.env
+.env.local
+.env.*.local
+# Banco de teste deste computador: nunca vai para o Git.
+/dados/
+.claude/
