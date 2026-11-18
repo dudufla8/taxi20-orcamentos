@@ -65,7 +65,8 @@ const pad = x => String(x).padStart(2, '0');
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const parseDate = s => (s ? new Date(s + 'T00:00:00') : null);
 const fmtDate = d => { if (!d) return ''; if (typeof d === 'string') d = parseDate(d); return isNaN(d) ? '' : d.toLocaleDateString('pt-BR'); };
-const quandoTexto = (d, h) => [fmtDate(d), h ? `às ${h}` : ''].filter(Boolean).join(' ');
+const fmtDataHora = ms => { const d = new Date(ms); return isNaN(d) ? '' : `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`; };
+const quandoTexto =(d, h) => [fmtDate(d), h ? `às ${h}` : ''].filter(Boolean).join(' ');
 const addDays = (s, k) => { const d = parseDate(s) || parseDate(today()); d.setDate(d.getDate() + k); return d; };
 const daysUntil = d => Math.round((d - parseDate(today())) / 864e5);
 const initials = s => (String(s || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('') || 'T').toUpperCase();
@@ -161,8 +162,10 @@ function estadoSalvo() {
   el.textContent = falhaAoSalvar ? 'Erro ao salvar' : pendentes.size ? 'Salvando…' : 'Salvo';
   el.classList.toggle('erro', falhaAoSalvar);
 }
+let emVoo = 0;
 async function enviarProposta(id) {
   pendentes.delete(id);
+  emVoo++;
   const q = getQuote(id); if (!q) return;
   try {
     const { proposta } = await api('PUT', `/api/propostas/${encodeURIComponent(id)}`, { dados: q });
@@ -172,6 +175,7 @@ async function enviarProposta(id) {
     falhaAoSalvar = true;
     toast(e.status === 401 ? 'Sua sessão terminou. Abra de novo pelo portal.' : e.message);
   }
+  emVoo--;
   estadoSalvo();
 }
 /** Salva com um pequeno atraso (enquanto a pessoa digita). */
@@ -201,6 +205,11 @@ async function deleteQuote(id) {
 const EMP_DEFAULT = {
   nome: 'Táxi 2.0', cnpj: '38.226.036/0001-60', telefone: '', email: '', site: '', endereco: 'São José dos Pinhais, PR',
   logo: LOGO_TAXI20, cor: '#0f2744', pagamento: '', condicoes: DEFAULT_COND, validade: 7,
+  tarifas: [
+    { veiculo: 'Táxi comum', bandeirada: '', valorKm: '', minimo: '' },
+    { veiculo: 'Sedan executivo', bandeirada: '', valorKm: '', minimo: '' },
+    { veiculo: 'SUV executivo', bandeirada: '', valorKm: '', minimo: '' },
+  ],
 };
 const getEmpresa = () => ({ ...EMP_DEFAULT, ...(S.empresa || {}) });
 let empresaPendente = null;
@@ -257,8 +266,10 @@ const isExpired = q => { const v = validUntil(q); return !!v && daysUntil(v) < 0
 /* ---------- Link do cliente ---------- */
 const shareUrl = q => `${location.origin}/p/${q.token}`;
 
-function approveLink(q, e, o) {
-  const msg = `Olá${e.nome ? ', ' + e.nome : ''}! Gostaria de aprovar a proposta Nº ${q.numero} — opção "${o.nome || 'Transporte'}" no valor de ${brl(calc(q, o).total)}.`;
+/** Depois de aprovar: link para o cliente avisar a empresa (WhatsApp ou e-mail). */
+function avisoLink(q, e) {
+  const a = q.aprovacao || {};
+  const msg = `Olá${e.nome ? ', ' + e.nome : ''}! Acabei de aprovar a proposta Nº ${q.numero} — opção "${a.opcao || ''}" no valor de ${brl(a.valor)}.`;
   const ph = waNumber(e.telefone);
   if (ph) return `https://wa.me/${ph}?text=${encodeURIComponent(msg)}`;
   if (e.email) return `mailto:${e.email}?subject=${encodeURIComponent('Aprovação da proposta ' + q.numero)}&body=${encodeURIComponent(msg)}`;
@@ -304,11 +315,16 @@ function renderProposal(q, e, { interactive = false } = {}) {
 
   const hasBreakdown = (q.adicionais || []).some(a => n(a.valor)) || n(q.desconto) > 0;
 
+  const aprovada = q.status === 'aprovada' && q.aprovacao;
+  const podeAprovar = interactive && q.status !== 'aprovada' && q.status !== 'recusada' && !isExpired(q);
   const optionCard = o => {
     const t = calc(q, o);
-    const link = interactive && q.status !== 'aprovada' && !isExpired(q) ? approveLink(q, e, o) : '';
-    return `<article class="option ${o.recomendado && opcoes.length > 1 ? 'is-rec' : opcoes.length === 1 ? 'is-rec' : ''}">
-      ${o.recomendado && opcoes.length > 1 ? `<span class="rec-badge">${ic('star')} Recomendado</span>` : ''}
+    const escolhida = aprovada && q.aprovacao.opcao === (o.nome || 'Transporte');
+    const destaque = aprovada ? escolhida : (o.recomendado && opcoes.length > 1) || opcoes.length === 1;
+    const badge = escolhida ? `<span class="rec-badge ok">${ic('check')} Opção aprovada</span>`
+      : !aprovada && o.recomendado && opcoes.length > 1 ? `<span class="rec-badge">${ic('star')} Recomendado</span>` : '';
+    return `<article class="option ${destaque ? 'is-rec' : ''} ${aprovada && !escolhida ? 'is-dim' : ''}">
+      ${badge}
       <h3>${esc(o.nome || 'Transporte')}</h3>
       ${o.veiculo || o.prazo ? `<div class="opt-meta">${o.veiculo ? `<span>${ic('car')}${esc(o.veiculo)}</span>` : ''}${o.prazo ? `<span>${ic('clock')}${esc(o.prazo)}</span>` : ''}</div>` : ''}
       ${o.descricao ? `<p>${esc(o.descricao)}</p>` : ''}
@@ -319,7 +335,7 @@ function renderProposal(q, e, { interactive = false } = {}) {
         ${(q.adicionais || []).filter(a => n(a.valor)).map(a => `<div><dt>${esc(a.descricao || 'Adicional')}</dt><dd>${brl(a.valor)}</dd></div>`).join('')}
         ${t.desc > 0 ? `<div class="minus"><dt>Desconto${q.descontoTipo === '%' ? ` (${fmtNum(q.desconto)}%)` : ''}</dt><dd>− ${brl(t.desc)}</dd></div>` : ''}
       </dl>` : ''}
-      ${link ? `<a class="btn btn-brand" href="${esc(link)}" target="_blank" rel="noopener">${ic('check')} Aprovar esta opção</a>` : ''}
+      ${podeAprovar && n(o.valor) > 0 ? `<button type="button" class="btn btn-brand no-print" data-aprovar="${(q.opcoes || []).indexOf(o)}">${ic('check')} Aprovar esta opção</button>` : ''}
     </article>`;
   };
 
@@ -352,6 +368,10 @@ function renderProposal(q, e, { interactive = false } = {}) {
     </header>
 
     ${q.status === 'recusada' ? `<div class="p-status bad">${ic('x')} Esta proposta foi recusada ou cancelada.</div>` : ''}
+    ${aprovada ? `<div class="p-status ok">${ic('check')}
+      <span>Aprovada por <b>${esc(q.aprovacao.por)}</b> em ${fmtDataHora(q.aprovacao.em)} — opção <b>${esc(q.aprovacao.opcao)}</b> (${brl(q.aprovacao.valor)}).</span>
+      ${interactive && avisoLink(q, e) ? `<a class="btn btn-sm no-print" href="${esc(avisoLink(q, e))}" target="_blank" rel="noopener">${ic('phone')}Avisar a empresa</a>` : ''}
+    </div>` : ''}
 
     <div class="p-cols">
       <section class="p-section p-client">
@@ -408,13 +428,33 @@ function topbarBrand() {
 }
 
 /* ---------- Lista ---------- */
+function vistoTexto(q) {
+  if (q.status === 'rascunho') return '';
+  if (q.aprovacao) return `<small class="seen">${ic('check')} ${esc(q.aprovacao.por.split(' ')[0])} · ${fmtCurto(q.aprovacao.em)}</small>`;
+  const v = q.visto || {};
+  if (!v.vezes) return '<small class="seen muted">Cliente ainda não abriu</small>';
+  return `<small class="seen">${ic('eye')} Visto ${v.vezes}× · ${fmtCurto(v.ultimo)}</small>`;
+}
+const fmtCurto = ms => { const d = new Date(ms); return isNaN(d) ? '' : `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`; };
+
 function statusPill(q) {
   if ((q.status === 'enviada' || q.status === 'rascunho') && isExpired(q)) return '<span class="pill amber">Expirada</span>';
   const [l, c] = STATUS[q.status] || STATUS.rascunho;
   return `<span class="pill ${c}">${l}</span>`;
 }
 
-function viewList() {
+async function atualizarDoServidor() {
+  if (pendentes.size || emVoo) return false;
+  try {
+    const d = await api('GET', '/api/dados');
+    if (pendentes.size || emVoo) return false;
+    S.propostas = d.propostas || []; S.empresa = d.empresa;
+    return true;
+  } catch { return false; }
+}
+
+function viewList(jaAtualizado) {
+  if (!jaAtualizado) atualizarDoServidor().then(ok => { if (ok && ['', '#', '#/'].includes(location.hash)) viewList(true); });
   document.title = 'Orçamentos de Transporte';
   const all = getQuotes().sort((a, b) => b.atualizadoEm - a.atualizadoEm);
   const open = all.filter(q => q.status === 'enviada' && !isExpired(q));
@@ -476,7 +516,7 @@ function viewList() {
         <a class="who main" href="#/editar/${q.id}"><strong>${esc(q.cliente?.empresa || q.cliente?.nome || 'Sem cliente')}</strong>${q.cliente?.empresa && q.cliente?.nome ? `<small>${esc(q.cliente.nome)}</small>` : ''}</a>
         <span class="route-s">${q.rota?.origem || q.rota?.destino ? `${esc(q.rota.origem || '?')} → ${esc(q.rota.destino || '?')}` : '<span style="color:var(--muted)">Rota não definida</span>'}</span>
         <span class="val">${mainTotal(q) ? brl(mainTotal(q)) : '—'}</span>
-        <span class="pill-c">${statusPill(q)}</span>
+        <span class="pill-c">${statusPill(q)}${vistoTexto(q)}</span>
         <span class="acts">
           <a class="icon-btn" href="#/ver/${q.id}" title="Ver como o cliente">${ic('eye')}</a>
           <button class="icon-btn" data-act="share" data-id="${q.id}" title="Copiar link para o cliente">${ic('link')}</button>
@@ -534,9 +574,31 @@ function opcoesHTML(q) {
       ${inp('Veículo', L('opcoes', i, 'veiculo'), o.veiculo, { attrs: 'list="dl-veiculos"', ph: 'Ex.: Sedan' })}
       ${inp('Duração estimada', L('opcoes', i, 'prazo'), o.prazo, { ph: 'Ex.: 40 min' })}
       ${inp('Valor (R$)', L('opcoes', i, 'valor'), o.valor, { type: 'number', attrs: MONEY, ph: '0,00' })}
+      <div class="calc-hint span2" data-sug="${i}"></div>
       ${area('Descrição (opcional)', L('opcoes', i, 'descricao'), o.descricao, { rows: 2, ph: 'O que está incluso nesta opção' })}
     </div>
   </div>`).join('');
+}
+
+/**
+ * Preço pela tabela da empresa (Minha empresa → Tabela de preços), com a mesma regra da
+ * calculadora de corridas do Financeiro: bandeirada + km × valor do km (com valor mínimo).
+ * Ida e volta = dois trechos. Pedágio e extras entram nos adicionais.
+ */
+const normal = s => String(s || '').trim().toLowerCase();
+function sugestaoTabela(q, o, empresa) {
+  if (!normal(o.veiculo)) return { aviso: 'Escolha o veículo para calcular pela tabela.' };
+  const t = (empresa.tarifas || []).find(x => normal(x.veiculo) === normal(o.veiculo));
+  if (!t || !(n(t.bandeirada) || n(t.valorKm))) return { aviso: `Sem tarifa para "${o.veiculo}". Cadastre em Minha empresa → Tabela de preços.` };
+  const km = n(q.rota?.distanciaKm);
+  if (!km) return { aviso: 'Informe a distância (km) na rota para calcular pela tabela.' };
+  const trechos = q.carga?.trajeto === 'Ida e volta' ? 2 : 1;
+  const porTrecho = Math.round((n(t.bandeirada) + km * n(t.valorKm)) * 100) / 100;
+  const usaMinimo = n(t.minimo) > porTrecho;
+  const valorTrecho = usaMinimo ? n(t.minimo) : porTrecho;
+  const valor = Math.round(valorTrecho * trechos * 100) / 100;
+  const conta = usaMinimo ? `valor mínimo ${brl(t.minimo)}` : `${brl(t.bandeirada)} + ${fmtNum(km)} km × ${brl(t.valorKm)}`;
+  return { valor, detalhe: trechos > 1 ? `2 trechos × (${conta})` : conta };
 }
 
 function adicionaisHTML(q) {
@@ -568,10 +630,12 @@ function viewEditor(id) {
         <datalist id="dl-veiculos">${VEICULOS.map(v => `<option value="${esc(v)}">`).join('')}</datalist>
 
         <section class="card">
-          <div class="card-h"><h3>${ic('file')} Proposta</h3></div>
+          ${q.aprovacao ? `<div class="ap-banner">${ic('check')}<div><b>Aprovada pelo cliente</b><br>${esc(q.aprovacao.por)} em ${fmtDataHora(q.aprovacao.em)} — ${esc(q.aprovacao.opcao)} (${brl(q.aprovacao.valor)})</div>
+            <button type="button" class="btn btn-sm" data-act="desfazer-aprovacao">Desfazer</button></div>` : ''}
+          <div class="card-h"><h3>${ic('file')} Proposta</h3>${q.status !== 'rascunho' ? `<span class="seen-inline">${q.visto?.vezes ? `${ic('eye')} Cliente abriu ${q.visto.vezes}× · último: ${fmtDataHora(q.visto.ultimo)}` : 'Cliente ainda não abriu o link'}</span>` : ''}</div>
           <div class="grid">
             ${inp('Número', P('numero'), q.numero)}
-            ${sel('Status', P('status'), q.status, Object.entries(STATUS).map(([k, [l]]) => [k, l]))}
+            ${q.aprovacao ? `<label class="fld"><span>Status</span><input value="Aprovada pelo cliente" disabled></label>` : sel('Status', P('status'), q.status, Object.entries(STATUS).map(([k, [l]]) => [k, l]))}
             ${inp('Data de emissão', P('data'), q.data, { type: 'date' })}
             ${inp('Validade (dias)', P('validadeDias'), q.validadeDias, { type: 'number', attrs: 'min="0" step="1"' })}
           </div>
@@ -657,8 +721,19 @@ function viewEditor(id) {
   estadoSalvo();
 
   const drawPreview = () => { pv.innerHTML = renderProposal(q, emp); };
+  const atualizarSugestoes = () => {
+    document.querySelectorAll('[data-sug]').forEach(el => {
+      const o = q.opcoes[+el.dataset.sug]; if (!o) return;
+      const s = sugestaoTabela(q, o, emp);
+      if (s.aviso) { el.innerHTML = `<span class="muted">${esc(s.aviso)}</span>`; return; }
+      const igual = Math.abs(n(o.valor) - s.valor) < 0.005;
+      el.innerHTML = `${ic('tag')}<span>Pela tabela: <b>${brl(s.valor)}</b> <small>(${esc(s.detalhe)})</small></span>
+        ${igual ? `<span class="ok-tag">${ic('check')}igual</span>` : `<button type="button" class="btn btn-sm" data-act="usar-tabela" data-i="${el.dataset.sug}">Usar</button>`}`;
+    });
+  };
   const changed = (immediate) => {
     saveQuote(q);
+    atualizarSugestoes();
     document.getElementById('ed-title').textContent = `Proposta Nº ${q.numero}`;
     clearTimeout(pvT);
     if (immediate) drawPreview(); else pvT = setTimeout(drawPreview, 120);
@@ -680,9 +755,24 @@ function viewEditor(id) {
   form.addEventListener('input', onInput);
   form.addEventListener('change', onInput);
 
-  form.addEventListener('click', ev => {
+  form.addEventListener('click', async ev => {
     const b = ev.target.closest('[data-act]'); if (!b) return;
     const i = +b.dataset.i;
+    if (b.dataset.act === 'usar-tabela') {
+      const s = sugestaoTabela(q, q.opcoes[i], emp); if (!s.valor) return;
+      q.opcoes[i].valor = s.valor;
+      const campo = form.querySelector(`[data-list="opcoes"][data-i="${i}"][data-k="valor"]`); if (campo) campo.value = s.valor;
+      changed(true); return;
+    }
+    if (b.dataset.act === 'desfazer-aprovacao') {
+      if (!confirm('Desfazer a aprovação do cliente? A proposta volta para "Enviada" e o cliente poderá aprovar de novo.')) return;
+      try {
+        salvarPendentes();
+        const { proposta } = await api('POST', `/api/propostas/${encodeURIComponent(q.id)}/desfazer-aprovacao`, {});
+        Object.assign(q, proposta); toast('Aprovação desfeita'); viewEditor(q.id);
+      } catch (e) { toast(e.message); }
+      return;
+    }
     switch (b.dataset.act) {
       case 'add-opcao': q.opcoes.push({ nome: '', veiculo: '', prazo: '', valor: '', descricao: '', recomendado: !q.opcoes.length }); break;
       case 'dup-opcao': q.opcoes.splice(i + 1, 0, { ...q.opcoes[i], nome: (q.opcoes[i].nome || 'Opção') + ' (cópia)', recomendado: false }); break;
@@ -702,10 +792,11 @@ function viewEditor(id) {
   });
 
   document.getElementById('btn-share').addEventListener('click', () => openShare(q, () => {
-    form.querySelector('[data-path="status"]').value = q.status; drawPreview();
+    const st = form.querySelector('[data-path="status"]'); if (st) st.value = q.status; drawPreview();
   }));
 
   drawPreview();
+  atualizarSugestoes();
 }
 
 /* ---------- Compartilhar ---------- */
@@ -751,6 +842,9 @@ function viewLocal(id) {
     </div></div>
     <div class="client-wrap">${renderProposal(q, getEmpresa(), { interactive: true })}</div>`;
   document.getElementById('sh').addEventListener('click', () => openShare(q));
+  app.addEventListener('click', ev => {
+    if (ev.target.closest('[data-aprovar]')) toast('Na pré-visualização o botão não aprova. Só o cliente aprova, pelo link.');
+  });
 }
 
 /* ---------- Página pública do cliente ---------- */
@@ -763,12 +857,47 @@ async function viewPublic(codigo) {
     q.opcoes = q.opcoes || []; q.adicionais = q.adicionais || [];
     q.cliente = q.cliente || {}; q.rota = q.rota || {}; q.carga = q.carga || {};
     document.title = `Proposta ${q.numero}${e.nome ? ' — ' + e.nome : ''}`;
-    app.innerHTML = `
-      <div class="client-bar no-print"><div>
-        <span class="t">Proposta Nº ${esc(q.numero)}${e.nome ? ` · ${esc(e.nome)}` : ''}</span>
-        <button class="btn btn-sm" onclick="window.print()">${ic('print')}Imprimir / PDF</button>
-      </div></div>
-      <div class="client-wrap">${renderProposal(q, e, { interactive: true })}</div>`;
+    const desenhar = () => {
+      app.innerHTML = `
+        <div class="client-bar no-print"><div>
+          <span class="t">Proposta Nº ${esc(q.numero)}${e.nome ? ` · ${esc(e.nome)}` : ''}</span>
+          <button class="btn btn-sm" onclick="window.print()">${ic('print')}Imprimir / PDF</button>
+        </div></div>
+        <div class="client-wrap">${renderProposal(q, e, { interactive: true })}</div>`;
+    };
+    desenhar();
+
+    // Aprovar: confirma com o nome de quem aprova e registra no sistema.
+    app.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-aprovar]'); if (!b) return;
+      const i = +b.dataset.aprovar, o = q.opcoes[i]; if (!o) return;
+      const m = modal(`
+        <h3>Aprovar a proposta</h3>
+        <p>Opção <b>${esc(o.nome || 'Transporte')}</b>${o.veiculo ? ` (${esc(o.veiculo)})` : ''} — <b>${brl(calc(q, o).total)}</b></p>
+        <label class="fld"><span>Seu nome</span><input id="ap-nome" autocomplete="name" placeholder="Nome de quem está aprovando" value="${esc(q.cliente.nome || '')}"></label>
+        <div class="notice" id="ap-erro" hidden></div>
+        <div class="actions">
+          <button class="btn btn-brand-solid" id="ap-ok" style="--brand:${esc(e.cor)}">${ic('check')}Confirmar aprovação</button>
+          <button class="btn btn-ghost" data-close>Cancelar</button>
+        </div>`);
+      const nome = m.querySelector('#ap-nome'), erro = m.querySelector('#ap-erro'), okBtn = m.querySelector('#ap-ok');
+      nome.focus();
+      const confirmar = async () => {
+        if (nome.value.trim().length < 3) { erro.hidden = false; erro.textContent = 'Informe o seu nome para aprovar.'; nome.focus(); return; }
+        okBtn.disabled = true; okBtn.textContent = 'Aprovando…';
+        try {
+          const { aprovacao } = await api('POST', `/api/publico/${encodeURIComponent(codigo)}/aprovar`, { opcao: i, nome: nome.value.trim() });
+          q.aprovacao = aprovacao; q.status = 'aprovada';
+          m.remove(); desenhar(); window.scrollTo({ top: 0, behavior: 'smooth' });
+          toast('Proposta aprovada! A empresa já foi avisada no sistema.');
+        } catch (err2) {
+          erro.hidden = false; erro.textContent = err2.message;
+          okBtn.disabled = false; okBtn.innerHTML = `${ic('check')}Confirmar aprovação`;
+        }
+      };
+      okBtn.addEventListener('click', confirmar);
+      nome.addEventListener('keydown', k => { if (k.key === 'Enter') confirmar(); });
+    });
   } catch (err) {
     const naoExiste = err.status === 404;
     app.innerHTML = `<div class="container"><div class="empty"><div class="big">${ic('alert')}</div>
@@ -831,6 +960,14 @@ function viewEmpresa() {
           </div>
         </section>
         <section class="card">
+          <div class="card-h"><h3>${ic('tag')} Tabela de preços</h3></div>
+          <p class="hint">Usada no botão "Usar" de cada opção: <b>bandeirada + km × valor do km</b> (a mesma regra da calculadora do Financeiro). Se der menos que o mínimo, vale o mínimo. Ida e volta conta dois trechos. Pedágio e extras vão nos adicionais.</p>
+          <datalist id="dl-veiculos">${VEICULOS.map(v => `<option value="${esc(v)}">`).join('')}</datalist>
+          <div class="tarifa-head"><span>Veículo</span><span>Bandeirada</span><span>R$ por km</span><span>Mínimo</span><span></span></div>
+          <div id="tarifas"></div>
+          <button type="button" class="btn add-btn" data-act="add-tarifa">${ic('plus')}Adicionar veículo</button>
+        </section>
+        <section class="card">
           <div class="card-h"><h3>${ic('file')} Padrões para novas propostas</h3></div>
           <div class="grid">
             ${inp('Validade padrão (dias)', P('validade'), e.validade, { type: 'number', attrs: 'min="0" step="1"' })}
@@ -853,9 +990,30 @@ function viewEmpresa() {
     document.getElementById('logo-prev').innerHTML = logoHTML(e);
     document.getElementById('logo-rm').hidden = !e.logo;
   };
+  e.tarifas = structuredClone(Array.isArray(e.tarifas) ? e.tarifas : []); // cópia: não mexe no padrão
+  const tarifasHTML = () => e.tarifas.map((t, i) => `<div class="tarifa-row">
+      <input ${L('tarifas', i, 'veiculo')} value="${esc(t.veiculo)}" list="dl-veiculos" placeholder="Veículo" aria-label="Veículo">
+      <input type="number" ${MONEY} ${L('tarifas', i, 'bandeirada')} value="${esc(t.bandeirada)}" placeholder="R$ 0,00" aria-label="Bandeirada">
+      <input type="number" ${MONEY} ${L('tarifas', i, 'valorKm')} value="${esc(t.valorKm)}" placeholder="R$ 0,00" aria-label="Valor por km">
+      <input type="number" ${MONEY} ${L('tarifas', i, 'minimo')} value="${esc(t.minimo)}" placeholder="R$ 0,00" aria-label="Valor mínimo">
+      <button type="button" class="icon-btn danger" data-act="del-tarifa" data-i="${i}" title="Remover">${ic('trash')}</button>
+    </div>`).join('');
+  const desenharTarifas = () => { document.getElementById('tarifas').innerHTML = tarifasHTML(); };
+  desenharTarifas();
+  form.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'add-tarifa') e.tarifas.push({ veiculo: '', bandeirada: '', valorKm: '', minimo: '' });
+    else if (b.dataset.act === 'del-tarifa') e.tarifas.splice(+b.dataset.i, 1);
+    else return;
+    desenharTarifas(); saveEmpresa(e);
+    if (b.dataset.act === 'add-tarifa') document.querySelector('#tarifas .tarifa-row:last-child input')?.focus();
+  });
+
   const onInput = ev => {
-    const t = ev.target; if (!t.dataset.path) return;
+    const t = ev.target;
     const v = t.type === 'number' ? (t.value === '' ? '' : parseFloat(t.value)) : t.value;
+    if (t.dataset.list === 'tarifas') { e.tarifas[+t.dataset.i][t.dataset.k] = v; saveEmpresa(e); return; }
+    if (!t.dataset.path) return;
     setPath(e, t.dataset.path, v);
     if (t.dataset.path === 'cor') form.querySelectorAll('[data-path="cor"]').forEach(x => { if (x !== t && /^#[0-9a-f]{6}$/i.test(v)) x.value = v; });
     if (t.dataset.path === 'nome' && !e.logo) refreshLogo();

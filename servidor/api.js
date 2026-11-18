@@ -72,21 +72,61 @@ const objetoSimples = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
 
 function limparProposta(dados) {
   if (!objetoSimples(dados)) throw new ErroApi('Proposta inválida.');
-  const { id, token, atualizadoEm, atualizadoPor, ...resto } = dados;
+  const { id, token, atualizadoEm, atualizadoPor, aprovacao, visto, ...resto } = dados;
   if (JSON.stringify(resto).length > LIMITE_PROPOSTA) throw new ErroApi('A proposta ficou grande demais para salvar.');
   return resto;
 }
 
 const paraTempo = (v) => (v instanceof Date ? v.getTime() : new Date(v).getTime());
 
-const linhaParaProposta = (r) => ({
-  ...(r.dados ?? {}),
-  id: r.id,
-  numero: r.numero,
-  token: r.token,
-  atualizadoEm: paraTempo(r.atualizado_em),
-  atualizadoPor: r.atualizado_por
-});
+const aprovacaoDaLinha = (r) =>
+  r.aprovado_em ? { em: paraTempo(r.aprovado_em), por: r.aprovado_por ?? '', opcao: r.aprovado_opcao ?? '', valor: Number(r.aprovado_valor ?? 0) } : null;
+
+const linhaParaProposta = (r) => {
+  const aprovacao = aprovacaoDaLinha(r);
+  return {
+    ...(r.dados ?? {}),
+    ...(aprovacao ? { status: 'aprovada' } : {}),
+    id: r.id,
+    numero: r.numero,
+    token: r.token,
+    atualizadoEm: paraTempo(r.atualizado_em),
+    atualizadoPor: r.atualizado_por,
+    aprovacao,
+    visto: {
+      vezes: Number(r.visualizacoes ?? 0),
+      primeiro: r.visto_primeiro ? paraTempo(r.visto_primeiro) : null,
+      ultimo: r.visto_ultimo ? paraTempo(r.visto_ultimo) : null
+    }
+  };
+};
+
+const num = (v) => {
+  const x = parseFloat(v);
+  return Number.isFinite(x) ? x : 0;
+};
+
+/** Mesmo cálculo da tela (public/app.js, calc): frete + adicionais − desconto. */
+export function totalDaOpcao(dados, opcao) {
+  const base = num(opcao?.valor);
+  const ad = (Array.isArray(dados.adicionais) ? dados.adicionais : []).reduce((s, a) => s + num(a?.valor), 0);
+  const sub = base + ad;
+  let desc = dados.descontoTipo === '%' ? (sub * num(dados.desconto)) / 100 : num(dados.desconto);
+  desc = Math.min(Math.max(desc, 0), sub);
+  return Math.round((sub - desc) * 100) / 100;
+}
+
+/** Hoje no horário de Brasília (AAAA-MM-DD). */
+const hojeBrasil = (agora = new Date()) => agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+
+/** A proposta venceu? (data de emissão + validade em dias, no horário de Brasília) */
+export function propostaVencida(dados, agora = new Date()) {
+  const dias = num(dados.validadeDias);
+  if (!(dias > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(dados.data ?? ''))) return false;
+  const limite = new Date(`${dados.data}T00:00:00Z`);
+  limite.setUTCDate(limite.getUTCDate() + dias);
+  return hojeBrasil(agora) > limite.toISOString().slice(0, 10);
+}
 
 /** Próximo número do ano: 2026-0001, 2026-0002… (seguro com várias pessoas criando ao mesmo tempo). */
 async function proximoNumero(b) {
@@ -105,18 +145,52 @@ export async function tratarApi({ metodo, caminho, corpo = {}, cookies = {}, htt
     const partes = String(caminho).split('?')[0].split('/').filter(Boolean); // ['api', 'propostas', ':id']
     const recurso = partes[1] ?? '';
     const id = partes[2] ? decodeURIComponent(partes[2]) : '';
-    const rota = `${String(metodo).toUpperCase()} /${recurso}`;
+    const acao = partes[3] ?? '';
+    const rota = `${String(metodo).toUpperCase()} /${recurso}${acao ? '/' + acao : ''}`;
     const c = objetoSimples(corpo) ? corpo : {};
     const b = await obterBanco();
 
     // ---------- Público: página do cliente ----------
     if (rota === 'GET /publico') {
-      const [r] = await b.consulta(`SELECT * FROM propostas WHERE token = $1 AND NOT apagada`, [id]);
+      let [r] = await b.consulta(`SELECT * FROM propostas WHERE token = $1 AND NOT apagada`, [id]);
       if (!r) throw new ErroApi('Proposta não encontrada.', 404);
+      // Conta a visualização só quando quem abriu não é da equipe (sem sessão do Orçamentos).
+      if (!(await usuarioDaSessao(b, cookies))) {
+        [r] = await b.consulta(
+          `UPDATE propostas SET visualizacoes = visualizacoes + 1, visto_ultimo = NOW(), visto_primeiro = COALESCE(visto_primeiro, NOW())
+           WHERE id = $1 RETURNING *`,
+          [r.id]
+        );
+      }
       const [emp] = await b.consulta(`SELECT dados FROM memoria WHERE chave = 'empresa'`);
       const { criadoEm, ...q } = r.dados ?? {};
-      const { pagamento, condicoes, validade, ...e } = emp?.dados ?? {};
-      return ok({ q: { ...q, numero: r.numero }, e });
+      const { pagamento, condicoes, validade, tarifas, ...e } = emp?.dados ?? {};
+      const aprovacao = aprovacaoDaLinha(r);
+      return ok({ q: { ...q, ...(aprovacao ? { status: 'aprovada' } : {}), numero: r.numero, aprovacao }, e });
+    }
+
+    // O cliente aprova uma opção pelo link (pede o nome de quem aprovou).
+    if (rota === 'POST /publico/aprovar') {
+      const [r] = await b.consulta(`SELECT * FROM propostas WHERE token = $1 AND NOT apagada`, [id]);
+      if (!r) throw new ErroApi('Proposta não encontrada.', 404);
+      if (r.aprovado_em) throw new ErroApi('Esta proposta já foi aprovada.', 409);
+      const dados = r.dados ?? {};
+      if (dados.status === 'recusada') throw new ErroApi('Esta proposta foi cancelada. Fale com a empresa.', 409);
+      if (propostaVencida(dados)) throw new ErroApi('Esta proposta venceu. Peça uma proposta atualizada.', 409);
+      const nome = String(c.nome ?? '').trim().replace(/\s+/g, ' ');
+      if (nome.length < 3 || nome.length > 80) throw new ErroApi('Informe o seu nome para aprovar.');
+      const opcoes = Array.isArray(dados.opcoes) ? dados.opcoes : [];
+      const opcao = opcoes[Number(c.opcao)];
+      if (!Number.isInteger(Number(c.opcao)) || !opcao || !(num(opcao.valor) > 0)) throw new ErroApi('Opção inválida.');
+      const valor = totalDaOpcao(dados, opcao);
+      const [feito] = await b.consulta(
+        `UPDATE propostas SET aprovado_em = NOW(), aprovado_por = $2, aprovado_opcao = $3, aprovado_valor = $4
+         WHERE id = $1 AND aprovado_em IS NULL RETURNING *`,
+        [r.id, nome, String(opcao.nome || 'Transporte').slice(0, 120), valor]
+      );
+      if (!feito) throw new ErroApi('Esta proposta já foi aprovada.', 409);
+      await auditar(b, { email: '', nome: `Cliente: ${nome}` }, 'cliente_aprovou', r.id, `Proposta ${r.numero} — ${opcao.nome} (${valor})`);
+      return ok({ aprovacao: aprovacaoDaLinha(feito) });
     }
 
     // ---------- Entrada pelo portal ----------
@@ -178,6 +252,19 @@ export async function tratarApi({ metodo, caminho, corpo = {}, cookies = {}, htt
         [id, JSON.stringify(dados), numero, u.nome]
       );
       if (!r) throw new ErroApi('Proposta não encontrada (pode ter sido apagada por outra pessoa).', 404);
+      return ok({ proposta: linhaParaProposta(r) });
+    }
+
+    // Equipe desfaz a aprovação (ex.: o cliente desistiu ou aprovou a opção errada).
+    if (rota === 'POST /propostas/desfazer-aprovacao' && id) {
+      const [r] = await b.consulta(
+        `UPDATE propostas SET aprovado_em = NULL, aprovado_por = NULL, aprovado_opcao = NULL, aprovado_valor = NULL,
+           dados = jsonb_set(dados, '{status}', '"enviada"'), atualizado_em = NOW(), atualizado_por = $2
+         WHERE id = $1 AND NOT apagada AND aprovado_em IS NOT NULL RETURNING *`,
+        [id, u.nome]
+      );
+      if (!r) throw new ErroApi('Esta proposta não está aprovada.', 404);
+      await auditar(b, u, 'desfez_aprovacao', id, `Proposta ${r.numero}`);
       return ok({ proposta: linhaParaProposta(r) });
     }
 

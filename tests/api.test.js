@@ -84,6 +84,64 @@ test('propostas: numeração, salvar, link do cliente e apagar', async () => {
   assert.equal((await chamar('GET', '/api/dados', undefined, cookies)).corpo.propostas.length, 1);
 });
 
+const hoje = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+
+test('visualizações: conta o cliente, não a equipe', async () => {
+  const { cookies } = await entrar('Fábio');
+  const { corpo } = await chamar('POST', '/api/propostas', { dados: { data: hoje(), validadeDias: 7, opcoes: [] } }, cookies);
+  const token = corpo.proposta.token;
+  await chamar('GET', `/api/publico/${token}`, undefined, cookies); // equipe abrindo o link
+  await chamar('GET', `/api/publico/${token}`); // cliente
+  await chamar('GET', `/api/publico/${token}`); // cliente de novo
+  const p = (await chamar('GET', '/api/dados', undefined, cookies)).corpo.propostas.find((x) => x.token === token);
+  assert.equal(p.visto.vezes, 2);
+  assert.ok(p.visto.primeiro && p.visto.ultimo);
+});
+
+test('aprovação pelo cliente: registra, calcula o total no servidor e não some ao salvar', async () => {
+  const { cookies } = await entrar('Gabi');
+  const dados = {
+    data: hoje(), validadeDias: 7, status: 'enviada',
+    opcoes: [{ nome: 'Táxi', valor: 180 }, { nome: 'Executivo', valor: 320 }],
+    adicionais: [{ descricao: 'Pedágio', valor: 20 }], desconto: 10, descontoTipo: '%'
+  };
+  const { corpo } = await chamar('POST', '/api/propostas', { dados }, cookies);
+  const { id, token } = corpo.proposta;
+
+  assert.equal((await chamar('POST', `/api/publico/${token}/aprovar`, { opcao: 1, nome: 'x' })).status, 400); // nome curto
+  assert.equal((await chamar('POST', `/api/publico/${token}/aprovar`, { opcao: 9, nome: 'Carla Ribeiro' })).status, 400); // opção inexistente
+
+  const ap = await chamar('POST', `/api/publico/${token}/aprovar`, { opcao: 1, nome: 'Carla Ribeiro' });
+  assert.equal(ap.status, 200);
+  assert.equal(ap.corpo.aprovacao.opcao, 'Executivo');
+  assert.equal(ap.corpo.aprovacao.valor, 306); // (320 + 20) − 10%
+  assert.equal((await chamar('POST', `/api/publico/${token}/aprovar`, { opcao: 0, nome: 'Outra Pessoa' })).status, 409);
+
+  // A equipe salva com a cópia antiga (status "enviada"): a aprovação continua
+  await chamar('PUT', `/api/propostas/${id}`, { dados: { ...dados, status: 'enviada', aprovacao: null } }, cookies);
+  let p = (await chamar('GET', '/api/dados', undefined, cookies)).corpo.propostas.find((x) => x.id === id);
+  assert.equal(p.status, 'aprovada');
+  assert.equal(p.aprovacao.por, 'Carla Ribeiro');
+  const pub = await chamar('GET', `/api/publico/${token}`);
+  assert.equal(pub.corpo.q.status, 'aprovada');
+  assert.equal(pub.corpo.q.aprovacao.opcao, 'Executivo');
+
+  // Desfazer volta para "enviada"
+  assert.equal((await chamar('POST', `/api/propostas/${id}/desfazer-aprovacao`, {}, cookies)).status, 200);
+  p = (await chamar('GET', '/api/dados', undefined, cookies)).corpo.propostas.find((x) => x.id === id);
+  assert.equal(p.status, 'enviada');
+  assert.equal(p.aprovacao, null);
+  assert.equal((await chamar('POST', `/api/propostas/${id}/desfazer-aprovacao`, {})).status, 401); // sem login
+});
+
+test('não aprova proposta vencida nem cancelada', async () => {
+  const { cookies } = await entrar('Hugo');
+  const venc = await chamar('POST', '/api/propostas', { dados: { data: '2020-01-01', validadeDias: 7, opcoes: [{ nome: 'A', valor: 100 }] } }, cookies);
+  assert.equal((await chamar('POST', `/api/publico/${venc.corpo.proposta.token}/aprovar`, { opcao: 0, nome: 'Fulano Silva' })).status, 409);
+  const canc = await chamar('POST', '/api/propostas', { dados: { data: hoje(), validadeDias: 7, status: 'recusada', opcoes: [{ nome: 'A', valor: 100 }] } }, cookies);
+  assert.equal((await chamar('POST', `/api/publico/${canc.corpo.proposta.token}/aprovar`, { opcao: 0, nome: 'Fulano Silva' })).status, 409);
+});
+
 test('sair encerra a sessão', async () => {
   const { cookies } = await entrar('Davi');
   await chamar('POST', '/api/sair', {}, cookies);

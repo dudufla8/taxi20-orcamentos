@@ -58,6 +58,15 @@ export async function prepararTabelas(b) {
       apagada BOOLEAN NOT NULL DEFAULT FALSE
     )`,
     `CREATE INDEX IF NOT EXISTS propostas_atualizado ON propostas (atualizado_em DESC)`,
+    // Aprovação feita pelo cliente no link e visualizações do link (ficam fora de "dados"
+    // para que um salvamento da equipe nunca apague o que o cliente fez).
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS aprovado_em TIMESTAMPTZ`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS aprovado_por TEXT`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS aprovado_opcao TEXT`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS aprovado_valor NUMERIC`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS visto_primeiro TIMESTAMPTZ`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS visto_ultimo TIMESTAMPTZ`,
+    `ALTER TABLE propostas ADD COLUMN IF NOT EXISTS visualizacoes INTEGER NOT NULL DEFAULT 0`,
     // Sessões abertas pelo passe do portal (o token fica no cookie; aqui só o resumo SHA-256).
     `CREATE TABLE IF NOT EXISTS sessoes (
       token_hash TEXT PRIMARY KEY,
